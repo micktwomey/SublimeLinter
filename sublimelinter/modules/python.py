@@ -39,20 +39,27 @@
 # TODO:
 # * fix regex for variable names inside strings (quotes)
 
+import cPickle as pickle
+import os
+import subprocess
 import re
-import _ast
+import sys
 
 import pep8
 import pyflakes.checker as pyflakes
 
 from base_linter import BaseLinter
+import python_exceptions
+sys.modules["python_exceptions"] = python_exceptions
+from python_exceptions import OffsetError
+from python_external import pyflakes_check
 
 pyflakes.messages.Message.__str__ = lambda self: self.message % self.message_args
 
 CONFIG = {
-    'language': 'Python'
+    'language': 'python',
+    "executable": sys.executable,
 }
-
 
 class Pep8Error(pyflakes.messages.Message):
     message = 'PEP 8 (%s): %s'
@@ -71,71 +78,26 @@ class Pep8Warning(pyflakes.messages.Message):
         pyflakes.messages.Message.__init__(self, filename, loc, level='V', message_args=(code, text))
         self.text = text
 
-
-class OffsetError(pyflakes.messages.Message):
-    message = '%r at column %r'
-
-    def __init__(self, filename, loc, text, offset):
-        pyflakes.messages.Message.__init__(self, filename, loc, level='E', message_args=(text, offset + 1))
-        self.text = text
-        self.offset = offset
-
-
-class PythonError(pyflakes.messages.Message):
-    message = '%r'
-
-    def __init__(self, filename, loc, text):
-        pyflakes.messages.Message.__init__(self, filename, loc, level='E', message_args=(text,))
-        self.text = text
-
-
 class Dict2Obj:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
 
+def external_pyflakes(code, filename, ignore=None):
+    env = {
+        "PYTHONPATH": ":".join([
+            os.path.join(os.path.dirname(__file__)),
+            os.path.join(os.path.dirname(__file__), "libs"),
+        ])
+    }
+    cmd = [sys.executable, "-m", "python_external"]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    stdout, stderr = p.communicate(pickle.dumps((code, filename, ignore)))
+    if stderr:
+        print "stderr from {!r}: {}".format(cmd, stderr)
+    output = pickle.loads(stdout)
+    return output
 
 class Linter(BaseLinter):
-    def pyflakes_check(self, code, filename, ignore=None):
-        try:
-            tree = compile(code, filename, "exec", _ast.PyCF_ONLY_AST)
-        except (SyntaxError, IndentationError), value:
-            msg = value.args[0]
-
-            (lineno, offset, text) = value.lineno, value.offset, value.text
-
-            # If there's an encoding problem with the file, the text is None.
-            if text is None:
-                # Avoid using msg, since for the only known case, it contains a
-                # bogus message that claims the encoding the file declared was
-                # unknown.
-                if msg.startswith('duplicate argument'):
-                    arg = msg.split('duplicate argument ', 1)[1].split(' ', 1)[0].strip('\'"')
-                    error = pyflakes.messages.DuplicateArgument(filename, value, arg)
-                else:
-                    error = PythonError(filename, value, msg)
-            else:
-                line = text.splitlines()[-1]
-
-                if offset is not None:
-                    offset = offset - (len(text) - len(line))
-
-                if offset is not None:
-                    error = OffsetError(filename, value, msg, offset)
-                else:
-                    error = PythonError(filename, value, msg)
-            return [error]
-        except ValueError, e:
-            return [PythonError(filename, 0, e.args[0])]
-        else:
-            # Okay, it's syntactically valid.  Now check it.
-            if ignore is not None:
-                old_magic_globals = pyflakes._MAGIC_GLOBALS
-                pyflakes._MAGIC_GLOBALS += ignore
-            w = pyflakes.Checker(tree, filename)
-            if ignore is not None:
-                pyflakes._MAGIC_GLOBALS = old_magic_globals
-            return w.messages
-
     def pep8_check(self, code, filename, ignore=None):
         messages = []
         _lines = code.split('\n')
@@ -177,6 +139,9 @@ class Linter(BaseLinter):
 
         return messages
 
+    def executable_check(self, view, code, filename):
+        return self.built_in_check(view, code, filename)
+
     def built_in_check(self, view, code, filename):
         errors = []
 
@@ -187,7 +152,12 @@ class Linter(BaseLinter):
         pyflakes_disabled = view.settings().get('pyflakes_disabled', False)
 
         if not pyflakes_disabled:
-            errors.extend(self.pyflakes_check(code, filename, pyflakes_ignore))
+            if self.executable:
+                print "Using %s for pyflakes" % self.executable
+                errors.extend(external_pyflakes(code, filename, pyflakes_ignore))
+            else:
+                print "Using sublime's python for pyflakes"
+                errors.extend(pyflakes_check(code, filename, pyflakes_ignore))
 
         return errors
 
