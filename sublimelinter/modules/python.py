@@ -48,6 +48,8 @@ import sys
 import pyflakes.checker as pyflakes
 
 from base_linter import BaseLinter
+# Sometimes we get an import error here, this forcibly adds the libs to the path
+sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), "libs"))
 from python_exceptions import (
     OffsetError,
     Pep8Warning,
@@ -57,7 +59,6 @@ from python_external import (
     pep8_check,
     pyflakes_check,
 )
-
 pyflakes.messages.Message.__str__ = lambda self: self.message % self.message_args
 
 CONFIG = {
