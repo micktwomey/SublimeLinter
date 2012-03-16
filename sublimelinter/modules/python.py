@@ -45,12 +45,18 @@ import subprocess
 import re
 import sys
 
-import pep8
 import pyflakes.checker as pyflakes
 
 from base_linter import BaseLinter
-from python_exceptions import OffsetError
-from python_external import pyflakes_check
+from python_exceptions import (
+    OffsetError,
+    Pep8Warning,
+    Pep8Error,
+)
+from python_external import (
+    pep8_check,
+    pyflakes_check,
+)
 
 pyflakes.messages.Message.__str__ = lambda self: self.message % self.message_args
 
@@ -59,28 +65,7 @@ CONFIG = {
     "executable": sys.executable,
 }
 
-class Pep8Error(pyflakes.messages.Message):
-    message = 'PEP 8 (%s): %s'
-
-    def __init__(self, filename, loc, code, text):
-        # PEP 8 Errors are downgraded to "warnings"
-        pyflakes.messages.Message.__init__(self, filename, loc, level='W', message_args=(code, text))
-        self.text = text
-
-
-class Pep8Warning(pyflakes.messages.Message):
-    message = 'PEP 8 (%s): %s'
-
-    def __init__(self, filename, loc, code, text):
-        # PEP 8 Warnings are downgraded to "violations"
-        pyflakes.messages.Message.__init__(self, filename, loc, level='V', message_args=(code, text))
-        self.text = text
-
-class Dict2Obj:
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
-
-def external_pyflakes(code, filename, ignore=None):
+def external_check(code, filename, pep8_ignore, pyflakes_ignore):
     env = {
         "PYTHONPATH": ":".join([
             os.path.join(os.path.dirname(__file__)),
@@ -89,53 +74,15 @@ def external_pyflakes(code, filename, ignore=None):
     }
     cmd = [sys.executable, "-m", "python_external"]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stdin=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-    stdout, stderr = p.communicate(pickle.dumps((code, filename, ignore)))
+    stdout, stderr = p.communicate(pickle.dumps((code, filename, pep8_ignore, pyflakes_ignore)))
     if stderr:
         print "stderr from {!r}: {}".format(cmd, stderr)
     output = pickle.loads(stdout)
+    if isinstance(output, Exception):
+        raise output
     return output
 
 class Linter(BaseLinter):
-    def pep8_check(self, code, filename, ignore=None):
-        messages = []
-        _lines = code.split('\n')
-
-        if _lines:
-            def report_error(self, line_number, offset, text, check):
-                code = text[:4]
-                msg = text[5:]
-
-                if pep8.ignore_code(code):
-                    return
-                elif code.startswith('E'):
-                    messages.append(Pep8Error(filename, Dict2Obj(lineno=line_number, col_offset=offset), code, msg))
-                else:
-                    messages.append(Pep8Warning(filename, Dict2Obj(lineno=line_number, col_offset=offset), code, msg))
-
-            pep8.Checker.report_error = report_error
-            _ignore = ignore + pep8.DEFAULT_IGNORE.split(',')
-
-            class FakeOptions:
-                verbose = 0
-                select = []
-                ignore = _ignore
-
-            pep8.options = FakeOptions()
-            pep8.options.physical_checks = pep8.find_checks('physical_line')
-            pep8.options.logical_checks = pep8.find_checks('logical_line')
-            pep8.options.counters = dict.fromkeys(pep8.BENCHMARK_KEYS, 0)
-            good_lines = [l + '\n' for l in _lines]
-            good_lines[-1] = good_lines[-1].rstrip('\n')
-
-            if not good_lines[-1]:
-                good_lines = good_lines[:-1]
-
-            try:
-                pep8.Checker(filename, good_lines).check_all()
-            except:
-                pass
-
-        return messages
 
     def executable_check(self, view, code, filename):
         return self.built_in_check(view, code, filename)
@@ -143,18 +90,19 @@ class Linter(BaseLinter):
     def built_in_check(self, view, code, filename):
         errors = []
 
-        if view.settings().get("pep8", True):
-            errors.extend(self.pep8_check(code, filename, ignore=view.settings().get('pep8_ignore', [])))
-
+        pep8_ignore = view.settings().get('pep8_ignore', [])
         pyflakes_ignore = view.settings().get('pyflakes_ignore', None)
         pyflakes_disabled = view.settings().get('pyflakes_disabled', False)
 
         if not pyflakes_disabled:
             if self.executable:
-                print "Using %s for pyflakes" % self.executable
-                errors.extend(external_pyflakes(code, filename, pyflakes_ignore))
+                print "Using %s for pyflakes and pep8" % self.executable
+                pep8_results, pyflakes_results = external_check(code, filename, pep8_ignore, pyflakes_ignore)
+                errors.extend(pep8_results)
+                errors.extend(pyflakes_results)
             else:
-                print "Using sublime's python for pyflakes"
+                print "Using sublime's python for pyflakes and pep8"
+                errors.extend(pep8_check(code, filename, ignore=pep8_ignore))
                 errors.extend(pyflakes_check(code, filename, pyflakes_ignore))
 
         return errors
