@@ -49,13 +49,7 @@ import pep8
 import pyflakes.checker as pyflakes
 
 from base_linter import BaseLinter
-import python_exceptions
-sys.modules["python_exceptions"] = python_exceptions
 from python_exceptions import OffsetError
-import sublimelinter.modules.python_exceptions
-sys.modules["sublimelinter.modules.python_exceptions"] = sublimelinter.modules.python_exceptions
-from sublimelinter.modules.python_exceptions import OffsetError as OffsetError2
-from sublimelinter.modules.python_exceptions import PythonError as PythonError2
 from python_external import pyflakes_check
 
 pyflakes.messages.Message.__str__ = lambda self: self.message % self.message_args
@@ -206,7 +200,7 @@ class Linter(BaseLinter):
             if isinstance(error, (Pep8Error, Pep8Warning)):
                 self.underline_range(view, error.lineno, error.col, underlines)
 
-            elif isinstance(error, (OffsetError, OffsetError2)):
+            elif isinstance(error, OffsetError):
                 self.underline_range(view, error.lineno, error.offset, underlines)
 
             elif isinstance(error, (pyflakes.messages.RedefinedWhileUnused,
